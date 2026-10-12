@@ -1,0 +1,82 @@
+name: ios-sim-smoke
+# Throwaway smoke: install one iOS Simulator build, cold-start it N times, keep ONLY screenshots and expo-updates log lines.
+# No secrets. The build URL is an expiring link passed at dispatch time. This repo is deleted after the result is recorded.
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: 'Expiring URL of a simulator build (.tar.gz containing one .app)'
+        required: true
+      bundle_id:
+        description: 'Bundle identifier to launch'
+        default: 'pro.myria.app'
+      wait_seconds:
+        description: 'Seconds to wait after each cold start before the screenshot'
+        default: '120'
+      cold_starts:
+        description: 'Number of cold starts (2 = the second launch runs any update staged by the first)'
+        default: '2'
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      APP_URL: ${{ inputs.app_url }}
+      BUNDLE: ${{ inputs.bundle_id }}
+      WAIT: ${{ inputs.wait_seconds }}
+      COLD_STARTS: ${{ inputs.cold_starts }}
+    steps:
+      - name: Fetch the simulator build
+        run: |
+          set -euo pipefail
+          [[ "$WAIT" =~ ^[0-9]{1,4}$ && "$COLD_STARTS" =~ ^[1-5]$ && "$BUNDLE" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "bad inputs"; exit 2; }
+          curl -fsSL "$APP_URL" -o app.tar.gz
+          mkdir app && tar -xzf app.tar.gz -C app
+          APP=$(find app -maxdepth 4 -name '*.app' -type d | head -1)
+          test -n "$APP"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist") build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
+          /usr/libexec/PlistBuddy -c 'Print :EXUpdatesURL' "$APP/Expo.plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c 'Print :EXUpdatesRuntimeVersion' "$APP/Expo.plist" 2>/dev/null || true
+      - name: Boot an iPhone simulator
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)['devices']
+          runtimes = sorted((r for r in d if '.iOS-' in r), key=lambda r: [int(x) for x in r.split('.iOS-')[1].split('-')], reverse=True)
+          print(next(x['udid'] for r in runtimes for x in d[r] if x['name'].startswith('iPhone')))")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl list devices | grep "$UDID"
+      - name: Install
+        run: xcrun simctl install "$UDID" "$APP"
+      - name: Cold starts
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for i in $(seq 1 "$COLD_STARTS"); do
+            echo "cold start $i at $(date -u +%H:%M:%SZ)"
+            xcrun simctl launch "$UDID" "$BUNDLE"
+            sleep "$WAIT"
+            xcrun simctl io "$UDID" screenshot "out/cold-start-$i.png"
+            xcrun simctl terminate "$UDID" "$BUNDLE" || true
+            sleep 5
+          done
+      - name: Keep only expo-updates log lines
+        run: |
+          set -uo pipefail
+          xcrun simctl spawn "$UDID" log show --last 60m --style compact \
+            --predicate 'subsystem CONTAINS[c] "expo" OR category CONTAINS[c] "updates"' > raw.txt || true
+          # Only expo-updates lines leave the runner; nothing else from the app or the system is published.
+          grep -i -E 'expo.?updates|EXUpdates|dev\.expo' raw.txt > out/expo-updates.txt || true
+          rm -f raw.txt
+          wc -l out/expo-updates.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-out
+          path: out/
+          retention-days: 1
