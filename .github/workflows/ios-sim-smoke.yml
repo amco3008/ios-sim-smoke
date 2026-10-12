@@ -1,6 +1,6 @@
 name: ios-sim-smoke
-# Throwaway smoke: install one iOS Simulator build, cold-start it N times, keep ONLY screenshots and expo-updates log lines.
-# No secrets. The build URL is an expiring link passed at dispatch time. This repo is deleted after the result is recorded.
+# Per-release smoke: install one iOS Simulator build, cold-start it N times, keep ONLY screenshots and expo-updates log lines.
+# No secrets. The build URL is an expiring link passed at dispatch time. workflow_dispatch only; artifacts kept 1 day.
 on:
   workflow_dispatch:
     inputs:
