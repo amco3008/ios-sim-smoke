@@ -16,6 +16,9 @@ on:
       cold_starts:
         description: 'Number of cold starts (2 = the second launch runs any update staged by the first)'
         default: '2'
+      eas_client_id:
+        description: 'Optional uppercase UUID seeded as expo.eas-client-id before the first launch (puts the install in a chosen rollout cohort)'
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -27,6 +30,7 @@ jobs:
       BUNDLE: ${{ inputs.bundle_id }}
       WAIT: ${{ inputs.wait_seconds }}
       COLD_STARTS: ${{ inputs.cold_starts }}
+      CLIENT_ID: ${{ inputs.eas_client_id }}
     steps:
       - name: Fetch the simulator build
         run: |
@@ -53,7 +57,18 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl list devices | grep "$UDID"
       - name: Install
-        run: xcrun simctl install "$UDID" "$APP"
+        run: |
+          set -euo pipefail
+          xcrun simctl install "$UDID" "$APP"
+          if [ -n "$CLIENT_ID" ]; then
+            [[ "$CLIENT_ID" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]] || { echo "bad eas_client_id"; exit 2; }
+            # expo-eas-client stores the id in UserDefaults.standard under "expo.eas-client-id" (EASClientID.swift) and only
+            # generates one when absent, so seeding the app container's preferences before the first launch fixes the cohort.
+            DATA=$(xcrun simctl get_app_container "$UDID" "$BUNDLE" data)
+            mkdir -p "$DATA/Library/Preferences"
+            /usr/libexec/PlistBuddy -c "Add :expo.eas-client-id string $CLIENT_ID" "$DATA/Library/Preferences/$BUNDLE.plist"
+            echo "seeded expo.eas-client-id"
+          fi
       - name: Cold starts
         run: |
           set -euo pipefail
