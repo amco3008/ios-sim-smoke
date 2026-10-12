@@ -69,12 +69,15 @@ jobs:
       - name: Keep only expo-updates log lines
         run: |
           set -uo pipefail
-          xcrun simctl spawn "$UDID" log show --last 60m --style compact \
-            --predicate 'subsystem CONTAINS[c] "expo" OR category CONTAINS[c] "updates"' > raw.txt || true
-          # Only expo-updates lines leave the runner; nothing else from the app or the system is published.
-          grep -i -E 'expo.?updates|EXUpdates|dev\.expo' raw.txt > out/expo-updates.txt || true
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          # Run 1 (10-12) kept 0 lines with a subsystem predicate: filter by the app PROCESS and include info/debug levels.
+          xcrun simctl spawn "$UDID" log show --last 60m --info --debug --style compact \
+            --predicate "process == \"$EXE\"" > raw.txt || true
+          echo "app process lines: $(wc -l < raw.txt)"
+          # Only update-related lines leave the runner; nothing else from the app or the system is published.
+          grep -i -E 'expo.?updates|EXUpdates|updates state|manifest|launch ?asset|update ?id|embedded update|rollback' raw.txt > out/expo-updates.txt || true
           rm -f raw.txt
-          wc -l out/expo-updates.txt
+          echo "kept lines: $(wc -l < out/expo-updates.txt)"
       - uses: actions/upload-artifact@v4
         with:
           name: smoke-out
