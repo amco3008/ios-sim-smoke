@@ -81,6 +81,26 @@ jobs:
             xcrun simctl terminate "$UDID" "$BUNDLE" || true
             sleep 5
           done
+      - name: expo-updates launch counters (update ids and counters only)
+        run: |
+          set -uo pipefail
+          # Run 2 (10-13) kept no expo-updates log lines, so it could not show WHICH update cold start 2 ran.
+          # expo-updates records every launch in its own SQLite DB (Application Support/.expo-internal/expo-v*.db):
+          # successful_launch_count / failed_launch_count per update id answer that directly.
+          DATA=$(xcrun simctl get_app_container "$UDID" "$BUNDLE" data)
+          DB=$(find "$DATA/Library" -name 'expo-v*.db' 2>/dev/null | head -1)
+          if [ -z "$DB" ]; then
+            echo "no expo-updates db; .db files under Library:"
+            find "$DATA/Library" -name '*.db' 2>/dev/null | sed "s#^$DATA/##" | head -10
+            exit 0
+          fi
+          echo "db: ${DB#"$DATA"/}"
+          if ! sqlite3 -header -csv "$DB" "select lower(hex(id)) as update_id, status, successful_launch_count, failed_launch_count, strftime('%Y-%m-%dT%H:%M:%SZ', last_accessed / 1000, 'unixepoch') as last_accessed from updates order by last_accessed" > out/expo-updates-db.csv; then
+            echo "query failed; updates columns:"
+            sqlite3 "$DB" "select name from pragma_table_info('updates')" | tr '\n' ' '
+            echo
+          fi
+          cat out/expo-updates-db.csv 2>/dev/null || true
       - name: Keep only expo-updates log lines
         run: |
           set -uo pipefail
